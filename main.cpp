@@ -4,135 +4,146 @@
 #include <stdio.h>
 #include <cmath>
 #include <chrono>
+#include <unordered_set>
 
 #include "ogrsf_frmts.h"
 
+#include "DataStructures.h"
+#include "PointMap.h"
+
+#define DRAG_COEFFICIENT 0.006
+#define TIME_STEP 0.1
+#define GRAVITY_CONSTANT 9.81
+#define MINIMUM_SPEED_KMH 3
+#define MAXIMUM_SPEED_KMH 30
+
 using namespace std;
 
-struct Connection;
+void recursiveRouteSearch(
+		Route &route,
+		vector<Connection*> &connections,
+		RoadPoint* startPoint,
+		RoadPoint* previousPoint,
+		RoadPoint* currentPoint,
+		double currentSpeed,
+		double currentDistance,
+		unordered_set<RoadPoint*> &startingPointsSet,
+		vector<RoadPoint*> &startingPoints,
+		unordered_set<RoadPoint*> &visitedPoints
+		) {
 
-struct RoadPoint
-{
-	double x, y, z;
-	vector<Connection> connections;
-};
-
-struct Connection {
-	RoadPoint* connectedPoint;
-	double horizontalDistance;
-	double heightDifference;
-};
-
-class PointMap {
-private:
-	double minimumX, maximumX, minimumY, maximumY, minimumZ, maximumZ, pointThreshold;
-	int numberOfBins;
-	map<int, vector<RoadPoint*>*> pointMap;
-	vector<RoadPoint*> roadPoints;
-
-public:
-	PointMap(double minimumX, double maximumX, double minimumY, double maximumY, double minimumZ, double maximumZ, int numberOfBins, double pointThreshold);
-
-	~PointMap() {
-		for (RoadPoint* roadPoint : roadPoints) {
-			delete roadPoint;
-		}
-
-		for (auto mapEntry : pointMap) {
-			delete mapEntry.second;
-		}
+	// If we reached this point from another point, and it turns out to be something we consider a starting point
+	// we can delete it. There's no point to start from here since we can reach here from somewhere else
+	if (currentPoint != startPoint && startingPointsSet.find(currentPoint) != startingPointsSet.end()) {
+		startingPointsSet.erase(currentPoint);
+		auto startingPointIndex = find(startingPoints.begin(), startingPoints.end(), currentPoint);
+		startingPoints.erase(startingPointIndex);
 	}
 
-	RoadPoint* getPoint(double x, double y, double z) {
-		double xValue = ((x - minimumX) * numberOfBins / (maximumX - minimumX));
-		double yValue = ((y - minimumY) * numberOfBins / (maximumY - minimumY));
-		double zValue = ((z - minimumZ) * numberOfBins / (maximumZ - minimumZ));
+	// If there is no way to continue from this point, it is a route
+	bool routeStopped = true;
 
-		vector<int> xValues;
-		vector<int> yValues;
-		vector<int> zValues;
-
-		double xThreshold = pointThreshold * numberOfBins / (maximumX - minimumX);
-		xValues.push_back((int) xValue);
-
-		if (xValue - (int) xValue <= xThreshold) {
-			xValues.push_back((int) xValue - 1);
+	// Calculate for each possible connection
+	for (Connection *connection : currentPoint->connections) {
+		RoadPoint* nextPoint = connection->connectedPoint;
+		// If this is a connection back to the point we just came from, stop
+		if (nextPoint == previousPoint) {
+			continue;
 		}
 
-		if ((int) xValue + 1 - xValue <= xThreshold) {
-			xValues.push_back((int) xValue + 1);
+		if (visitedPoints.find(nextPoint) != visitedPoints.end()) {
+			continue;
 		}
 
+		// Check if we can overcome the next connection with the speed we've built
+		// Do this through a bit of numerical integration
+		double distance = 0;
+		double speed = currentSpeed;
 
-		double yThreshold = pointThreshold * numberOfBins / (maximumY - minimumY);
-		yValues.push_back((int) yValue);
-
-		if (yValue - (int) yValue <= yThreshold) {
-			yValues.push_back((int) yValue - 1);
+		while (distance < connection->horizontalDistance && speed >= MINIMUM_SPEED_KMH / 3.6) {
+			distance += speed * TIME_STEP;
+			speed += (-GRAVITY_CONSTANT * connection->sinSlope - DRAG_COEFFICIENT * speed * speed) * TIME_STEP;
 		}
 
-		if ((int) yValue + 1 - yValue <= yThreshold) {
-			yValues.push_back((int) yValue + 1);
+		if (speed < MINIMUM_SPEED_KMH / 3.6) {
+			continue;
 		}
 
-		double zThreshold = pointThreshold * numberOfBins / (maximumZ - minimumZ);
-		zValues.push_back((int) zValue);
-
-		if (zValue - (int) zValue <= zThreshold) {
-			zValues.push_back((int) zValue - 1);
+		if (speed > MAXIMUM_SPEED_KMH / 3.6) {
+			speed = MAXIMUM_SPEED_KMH / 3.6;
 		}
 
-		if ((int) zValue + 1 - zValue <= zThreshold) {
-			zValues.push_back((int) zValue + 1);
-		}
-
-		for (int xBin : xValues) {
-			for (int yBin : yValues) {
-				for (int zBin : zValues) {
-					int bin = (xBin * numberOfBins + yBin) * numberOfBins + zBin;
-					if (pointMap.find(bin) == pointMap.end()) {
-						pointMap[bin] = new vector<RoadPoint*>;
-					}
-
-					for (RoadPoint* roadPoint : *pointMap[bin]) {
-						if (abs(roadPoint->x - x) <= pointThreshold
-								&& abs(roadPoint->y - y) <= pointThreshold
-								&& abs(roadPoint->z - z) <= pointThreshold) {
-							return roadPoint;
-						}
-					}
-				}
-			}
-		}
-
-		// If no point was found, generate a new one
-		RoadPoint* newPoint = new RoadPoint;
-		newPoint->x = x;
-		newPoint->y = y;
-		newPoint->z = z;
-
-		int bin = ((int) xValue * numberOfBins + (int) yValue) * numberOfBins + (int) zValue;
-		pointMap[bin]->push_back(newPoint);
-		roadPoints.push_back(newPoint);
-
-		return newPoint;
+		routeStopped = false;
+		connections.push_back(connection);
+		visitedPoints.insert(currentPoint);
+		recursiveRouteSearch(route, connections, startPoint, currentPoint, nextPoint, speed, currentDistance + connection->horizontalDistance, startingPointsSet, startingPoints, visitedPoints);
+		visitedPoints.erase(currentPoint);
+		connections.pop_back();
 	}
 
-	vector<RoadPoint*> getAllPoints() {
-		return roadPoints;
-	}
-};
+	// If the route stopped here, add it to the list
+	if (routeStopped & currentDistance > route.distance) {
+		OGRSpatialReference source, target;
 
+		source.importFromEPSG(32633);
+		target.importFromEPSG(4326);
+
+		OGRCoordinateTransformation *transform = OGRCreateCoordinateTransformation(&source, &target);
+
+		route.distance = currentDistance;
+		route.connections = connections;
+		double x, y;
+		x = startPoint->x;
+		y = startPoint->y;
+		transform->Transform(1, &x, &y);
+
+		printf("\n\n\n\n");
+		printf("LINESTRING (%.6f %.6f", y, x);
+		for (Connection* connection : connections) {
+			x = connection->connectedPoint->x;
+			y = connection->connectedPoint->y;
+			transform->Transform(1, &x, &y);
+			printf(", %.6f %.6f", y, x);
+		}
+		printf(")\n");
+		cout << flush;
+	}
+}
+
+Route findLongestRouteFromPoint(RoadPoint* startingPoint, vector<RoadPoint*> &startingPoints) {
+	Route route;
+	route.distance = 0;
+
+	vector<Connection*> connections;
+
+	unordered_set<RoadPoint*> startingPointsSet;
+	for (RoadPoint *roadPoint : startingPoints) {
+		startingPointsSet.insert(roadPoint);
+	}
+
+	unordered_set<RoadPoint*> visitedPoints;
+
+	recursiveRouteSearch(route, connections, startingPoint, NULL, startingPoint, MINIMUM_SPEED_KMH+2 / 3.6, 0, startingPointsSet, startingPoints, visitedPoints);
+
+	return route;
+}
+
+
+
+// Used when sorting the list of local maxima, so we start with the very highest point
 bool comparePointHeights(RoadPoint* point1, RoadPoint* point2) {
 	return point1->z > point2->z;
 }
 
 int main()
 {
+	// Load GDAL
 	GDALAllRegister();
 
 	GDALDataset *dataset;
-	dataset = (GDALDataset*) GDALOpenEx("/home/martin/dev/python/sykkelrulle/0301Elveg2.0.gml", GDAL_OF_VECTOR, NULL, NULL, NULL);
+	// Currently, the data file is hardcoded. 0301Elveg2.0.gml maps all the roads in Oslo, and is available from
+	// kartkatalog.geonorge.no
+	dataset = (GDALDataset*) GDALOpenEx("0301Elveg2.0.gml", GDAL_OF_VECTOR, NULL, NULL, NULL);
 
 	if (!dataset) {
 		printf("Could not open file\n");
@@ -140,6 +151,8 @@ int main()
 	}
 
 	OGRLayer *veger;
+	// Veglenke is the feature layer in the ElVeg2.0 dataset that contains all the roads.
+	// Veglenke means "road chain" in Norwegian
 	veger = dataset->GetLayerByName("Veglenke");
 
 	if (!veger) {
@@ -147,6 +160,7 @@ int main()
 		exit(2);
 	}
 
+	// Next, go through all the features that exist in the layer, and find the maximum and minimum values of their coordinates
 	int numberOfFeatures = 0;
 	double minimumX = DBL_MAX;
 	double maximumX = DBL_MIN;
@@ -229,33 +243,34 @@ int main()
 					bool connectionFromNextToCurrent = false;
 
 					for (auto it = currentStart; it != currentEnd; ++it) {
-						if (it->connectedPoint == nextRoadPoint) {
+						if ((*it)->connectedPoint == nextRoadPoint) {
 							connectionFromCurrentToNext = true;
 							break;
 						}
 					}
 
 					for (auto it = nextStart; it != nextEnd; ++it) {
-						if (it->connectedPoint == currentRoadPoint) {
+						if ((*it)->connectedPoint == currentRoadPoint) {
 							connectionFromNextToCurrent = true;
 							break;
 						}
 					}
 
 					if(!connectionFromCurrentToNext) {
-						Connection connection;
-						connection.connectedPoint = nextRoadPoint;
-						connection.horizontalDistance = distance;
-						connection.heightDifference = heightDifference;
+						Connection *connection = new Connection;
+						connection->connectedPoint = nextRoadPoint;
+						connection->horizontalDistance = distance;
+						connection->heightDifference = heightDifference;
+						connection->sinSlope = sin(atan2(heightDifference, distance));
 						currentRoadPoint->connections.push_back(connection);
 					}
 
 					if(!connectionFromNextToCurrent) {
-						Connection connection;
-						connection.connectedPoint = currentRoadPoint;
-						connection.horizontalDistance = distance;
-						connection.heightDifference = -heightDifference;
-						currentRoadPoint->connections.push_back(connection);
+						Connection *connection = new Connection;
+						connection->connectedPoint = currentRoadPoint;
+						connection->horizontalDistance = distance;
+						connection->heightDifference = -heightDifference;
+						connection->sinSlope = sin(atan2(-heightDifference, distance));
 						nextRoadPoint->connections.push_back(connection);
 					}
 				}
@@ -264,44 +279,42 @@ int main()
 	}
 
 	printf("\rMapping roads. Currently on feature %d of %d\n", numberOfFeatures, numberOfFeatures);
-	printf("Finding local maxima...");
-	vector<RoadPoint*> maxima;
+	printf("Finding possible start points...");
+	vector<RoadPoint*> startPoints;
+
+	double rollingSlope = DRAG_COEFFICIENT * pow(MINIMUM_SPEED_KMH / 3.6, 2) / GRAVITY_CONSTANT;
 
 	for (RoadPoint* candidate : pointMap.getAllPoints()) {
-		double height = candidate->z;
-		bool highest = true;
-		for (Connection connection : candidate->connections) {
-			RoadPoint* roadPoint = connection.connectedPoint;
-			double connectionHeight = roadPoint->z;
-
-			if (connectionHeight > height) {
-				highest = false;
+		bool canRollFrom = false;
+		bool canRollTo = false;
+		for (Connection *connection : candidate->connections) {
+			if (connection->sinSlope > rollingSlope) {
+				canRollTo = true;
 				break;
+			}
+
+			if (connection->sinSlope < -rollingSlope) {
+				canRollFrom = true;
 			}
 		}
 
-		if (highest) {
-			maxima.push_back(candidate);
+		if (canRollFrom && !canRollTo) {
+			startPoints.push_back(candidate);
 		}
 	}
 
-	printf("\rFound %d local maxima\n", maxima.size());
+	printf("\rFound %d possible start points\n", startPoints.size());
 
 	// Sort maxima by height
-	sort(maxima.begin(), maxima.end(), comparePointHeights);
+	sort(startPoints.begin(), startPoints.end(), comparePointHeights);
 
-	for (RoadPoint* start : maxima) {
-
+	int pointCounter = 0;
+	while (pointCounter < startPoints.size()) {
+		RoadPoint* start = startPoints.at(pointCounter);
+		pointCounter++;
+		Route route = findLongestRouteFromPoint(start, startPoints);
+		printf("Found route of length %.0f m from point %d\n", route.distance, pointCounter);
+		cout << flush;
 	}
 
 }
-
-PointMap::PointMap(double minimumX, double maximumX, double minimumY, double maximumY, double minimumZ, double maximumZ, int numberOfBins, double pointThreshold) : minimumX(minimumX),
-	maximumX(maximumX),
-	minimumY(minimumY),
-	maximumY(maximumY),
-	minimumZ(minimumZ),
-	maximumZ(maximumZ),
-	numberOfBins(numberOfBins),
-	pointThreshold(pointThreshold)
-{}
