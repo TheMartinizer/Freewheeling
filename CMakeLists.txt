@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(GDAL REQUIRED)
 
 include_directories(Freewheeling ${GDAL_INCLUDE_DIRS})
-add_executable(Freewheeling main.cpp DataStructures.h PointMap.h PointMap.cpp)
+add_executable(Freewheeling main.cpp DataStructures.h PointMap.h Constants.h PointMap.cpp)
 
 target_link_libraries(Freewheeling ${GDAL_LIBRARIES})
 

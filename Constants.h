@@ -1,0 +1,10 @@
+#ifndef CONSTANTS_H
+#define CONSTANTS_H
+
+#define DRAG_COEFFICIENT 0.006
+#define TIME_STEP 0.01
+#define GRAVITY_CONSTANT 9.81
+#define MINIMUM_SPEED_KMH 3
+#define MAXIMUM_SPEED_KMH 30
+
+#endif // CONSTANTS_H

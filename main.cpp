@@ -4,128 +4,127 @@
 #include <stdio.h>
 #include <cmath>
 #include <chrono>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "ogrsf_frmts.h"
 
 #include "DataStructures.h"
 #include "PointMap.h"
-
-#define DRAG_COEFFICIENT 0.006
-#define TIME_STEP 0.1
-#define GRAVITY_CONSTANT 9.81
-#define MINIMUM_SPEED_KMH 3
-#define MAXIMUM_SPEED_KMH 30
+#include "Constants.h"
 
 using namespace std;
 
-void recursiveRouteSearch(
-		Route &route,
-		vector<Connection*> &connections,
-		RoadPoint* startPoint,
-		RoadPoint* previousPoint,
-		RoadPoint* currentPoint,
-		double currentSpeed,
-		double currentDistance,
-		unordered_set<RoadPoint*> &startingPointsSet,
-		vector<RoadPoint*> &startingPoints,
-		unordered_set<RoadPoint*> &visitedPoints
-		) {
-
-	// If we reached this point from another point, and it turns out to be something we consider a starting point
-	// we can delete it. There's no point to start from here since we can reach here from somewhere else
-	if (currentPoint != startPoint && startingPointsSet.find(currentPoint) != startingPointsSet.end()) {
-		startingPointsSet.erase(currentPoint);
-		auto startingPointIndex = find(startingPoints.begin(), startingPoints.end(), currentPoint);
-		startingPoints.erase(startingPointIndex);
-	}
-
-	// If there is no way to continue from this point, it is a route
-	bool routeStopped = true;
-
-	// Calculate for each possible connection
-	for (Connection *connection : currentPoint->connections) {
-		RoadPoint* nextPoint = connection->connectedPoint;
-		// If this is a connection back to the point we just came from, stop
-		if (nextPoint == previousPoint) {
-			continue;
-		}
-
-		if (visitedPoints.find(nextPoint) != visitedPoints.end()) {
-			continue;
-		}
-
-		// Check if we can overcome the next connection with the speed we've built
-		// Do this through a bit of numerical integration
-		double distance = 0;
-		double speed = currentSpeed;
-
-		while (distance < connection->horizontalDistance && speed >= MINIMUM_SPEED_KMH / 3.6) {
-			distance += speed * TIME_STEP;
-			speed += (-GRAVITY_CONSTANT * connection->sinSlope - DRAG_COEFFICIENT * speed * speed) * TIME_STEP;
-		}
-
-		if (speed < MINIMUM_SPEED_KMH / 3.6) {
-			continue;
-		}
-
-		if (speed > MAXIMUM_SPEED_KMH / 3.6) {
-			speed = MAXIMUM_SPEED_KMH / 3.6;
-		}
-
-		routeStopped = false;
-		connections.push_back(connection);
-		visitedPoints.insert(currentPoint);
-		recursiveRouteSearch(route, connections, startPoint, currentPoint, nextPoint, speed, currentDistance + connection->horizontalDistance, startingPointsSet, startingPoints, visitedPoints);
-		visitedPoints.erase(currentPoint);
-		connections.pop_back();
-	}
-
-	// If the route stopped here, add it to the list
-	if (routeStopped & currentDistance > route.distance) {
-		OGRSpatialReference source, target;
-
-		source.importFromEPSG(32633);
-		target.importFromEPSG(4326);
-
-		OGRCoordinateTransformation *transform = OGRCreateCoordinateTransformation(&source, &target);
-
-		route.distance = currentDistance;
-		route.connections = connections;
-		double x, y;
-		x = startPoint->x;
-		y = startPoint->y;
-		transform->Transform(1, &x, &y);
-
-		printf("\n\n\n\n");
-		printf("LINESTRING (%.6f %.6f", y, x);
-		for (Connection* connection : connections) {
-			x = connection->connectedPoint->x;
-			y = connection->connectedPoint->y;
-			transform->Transform(1, &x, &y);
-			printf(", %.6f %.6f", y, x);
-		}
-		printf(")\n");
-		cout << flush;
-	}
+bool compareLengths(Route route1, Route route2) {
+	return route1.distance > route2.distance;
 }
 
-Route findLongestRouteFromPoint(RoadPoint* startingPoint, vector<RoadPoint*> &startingPoints) {
-	Route route;
-	route.distance = 0;
+vector<Route> findRoutesFromPoint(RoadPoint* startingPoint, vector<RoadPoint*> &startingPoints) {
+	unordered_map<RoadPoint*, Route> routes;
+	unordered_map<RoadPoint*, SearchPoint> searchPoints;
+	unordered_set<RoadPoint*> visited;
 
-	vector<Connection*> connections;
+	double initialSpeed = MINIMUM_SPEED_KMH / 3.6;
+	double initialEnergy = startingPoint->z*GRAVITY_CONSTANT + 0.5*pow(initialSpeed, 2);
 
-	unordered_set<RoadPoint*> startingPointsSet;
-	for (RoadPoint *roadPoint : startingPoints) {
-		startingPointsSet.insert(roadPoint);
+	SearchPoint initialSearchPoint;
+
+	initialSearchPoint.startingPoint = startingPoint;
+	initialSearchPoint.currentPoint = startingPoint;
+	initialSearchPoint.distance = 0;
+	initialSearchPoint.speed = initialSpeed;
+	initialSearchPoint.energy = initialEnergy;
+
+	searchPoints[startingPoint] = initialSearchPoint;
+
+	while (searchPoints.size() > 0) {
+		// Find the SearchPoint with the highest current total energy
+		double highestEnergy = 0;
+		RoadPoint* bestSearchPointKey;
+
+		for (auto const& keyValuePair : searchPoints) {
+			if (keyValuePair.second.energy > highestEnergy) {
+				highestEnergy = keyValuePair.second.energy;
+				bestSearchPointKey = keyValuePair.first;
+			}
+		}
+
+		// Now that we've found the best point, remove it from the list so we won't use it further
+		SearchPoint searchPoint = searchPoints[bestSearchPointKey];
+		searchPoints.erase(bestSearchPointKey);
+		visited.insert(bestSearchPointKey);
+
+		double speedKmh = searchPoint.speed * 3.6;
+		int speedRounded = round(speedKmh);
+		int speedBin = speedRounded - MINIMUM_SPEED_KMH;
+
+		// Look through this search point's connections
+		bool routeContinues = false;
+		for (Connection* connection : searchPoint.currentPoint->connections) {
+			RoadPoint* nextPoint = connection->connectedPoint;
+
+			if (visited.find(nextPoint) != visited.end()) {
+				continue;
+			}
+
+			double finalSpeed = connection->speeds[speedBin] + (speedKmh - speedRounded) / 3.6;
+			double finalEnergy = nextPoint->z*GRAVITY_CONSTANT + 0.5*pow(finalSpeed,2);
+
+			if (finalSpeed < MINIMUM_SPEED_KMH / 3.6) {
+				continue;
+			}
+			routeContinues = true;
+
+			SearchPoint nextSearchPoint;
+
+			nextSearchPoint.startingPoint = startingPoint;
+			nextSearchPoint.currentPoint = nextPoint;
+			nextSearchPoint.connections = searchPoint.connections;
+			nextSearchPoint.connections.push_back(connection);
+
+			nextSearchPoint.speed = finalSpeed;
+			nextSearchPoint.distance = searchPoint.distance + connection->horizontalDistance;
+
+			if (searchPoints.count(nextPoint)) {
+				if (searchPoints[nextPoint].energy < finalEnergy) {
+					searchPoints[nextPoint] = nextSearchPoint;
+				}
+			} else {
+				searchPoints[nextPoint] = nextSearchPoint;
+
+				// Check if this is one of the starting points, and if so, erase it
+				startingPoints.erase(remove(startingPoints.begin(), startingPoints.end(), nextPoint), startingPoints.end());
+			}
+		}
+
+		if (!routeContinues) {
+			Route route;
+			route.startingPoint = startingPoint;
+			route.connections = searchPoint.connections;
+			route.distance = searchPoint.distance;
+
+			// Check if this route is longer than the previous route stored for this point
+			if (routes.count(searchPoint.currentPoint)) {
+				if (routes[searchPoint.currentPoint].distance < route.distance) {
+					routes[searchPoint.currentPoint] = route;
+				}
+			} else {
+				routes[searchPoint.currentPoint] = route;
+			}
+
+			//printf("\rFound %d routes from current point", routes.size());
+			cout << flush;
+		}
 	}
 
-	unordered_set<RoadPoint*> visitedPoints;
+	vector<Route> finalRoutes;
+	for (auto const& entries : routes) {
+		finalRoutes.push_back(entries.second);
+	}
 
-	recursiveRouteSearch(route, connections, startingPoint, NULL, startingPoint, MINIMUM_SPEED_KMH+2 / 3.6, 0, startingPointsSet, startingPoints, visitedPoints);
+	sort(finalRoutes.begin(), finalRoutes.end(), compareLengths);
 
-	return route;
+	return finalRoutes;
 }
 
 
@@ -262,6 +261,28 @@ int main()
 						connection->horizontalDistance = distance;
 						connection->heightDifference = heightDifference;
 						connection->sinSlope = sin(atan2(heightDifference, distance));
+						connection->cosSlope = cos(atan2(heightDifference, distance));
+
+						for (int j = 0; j < MAXIMUM_SPEED_KMH - MINIMUM_SPEED_KMH + 1; j++) {
+							double distance = 0;
+							double speed = (MINIMUM_SPEED_KMH + j) / 3.6;
+
+							while (distance < connection->horizontalDistance/connection->cosSlope && speed >= MINIMUM_SPEED_KMH / 3.6) {
+								distance += speed * TIME_STEP;
+								speed += (-GRAVITY_CONSTANT * connection->sinSlope - DRAG_COEFFICIENT * speed * speed) * TIME_STEP;
+							}
+
+							if (speed < MINIMUM_SPEED_KMH / 3.6) {
+								speed = -1;
+							}
+
+							if (speed > MAXIMUM_SPEED_KMH / 3.6) {
+								speed = MAXIMUM_SPEED_KMH / 3.6;
+							}
+
+							connection->speeds[j] = speed;
+						}
+
 						currentRoadPoint->connections.push_back(connection);
 					}
 
@@ -271,6 +292,28 @@ int main()
 						connection->horizontalDistance = distance;
 						connection->heightDifference = -heightDifference;
 						connection->sinSlope = sin(atan2(-heightDifference, distance));
+						connection->cosSlope = cos(atan2(-heightDifference, distance));
+
+						for (int j = 0; j < MAXIMUM_SPEED_KMH - MINIMUM_SPEED_KMH + 1; j++) {
+							double distance = 0;
+							double speed = (MINIMUM_SPEED_KMH + j) / 3.6;
+
+							while (distance < connection->horizontalDistance/connection->cosSlope && speed >= MINIMUM_SPEED_KMH / 3.6) {
+								distance += speed * TIME_STEP;
+								speed += (-GRAVITY_CONSTANT * connection->sinSlope - DRAG_COEFFICIENT * speed * speed) * TIME_STEP;
+							}
+
+							if (speed < MINIMUM_SPEED_KMH / 3.6) {
+								speed = -1;
+							}
+
+							if (speed > MAXIMUM_SPEED_KMH / 3.6) {
+								speed = MAXIMUM_SPEED_KMH / 3.6;
+							}
+
+							connection->speeds[j] = speed;
+						}
+
 						nextRoadPoint->connections.push_back(connection);
 					}
 				}
@@ -308,13 +351,58 @@ int main()
 	// Sort maxima by height
 	sort(startPoints.begin(), startPoints.end(), comparePointHeights);
 
+	vector<Route> allLongest;
+
 	int pointCounter = 0;
+	OGRSpatialReference source, target;
+
+	source.importFromEPSG(32633);
+	target.importFromEPSG(4326);
+
+	OGRCoordinateTransformation *transform = OGRCreateCoordinateTransformation(&source, &target);
+
 	while (pointCounter < startPoints.size()) {
 		RoadPoint* start = startPoints.at(pointCounter);
 		pointCounter++;
-		Route route = findLongestRouteFromPoint(start, startPoints);
-		printf("Found route of length %.0f m from point %d\n", route.distance, pointCounter);
+
+		// Below sea level is probably not going to be a good start point
+		if (start->z <= 0) {
+			break;
+		}
+
+		vector<Route> routes = findRoutesFromPoint(start, startPoints);
+		Route longest = routes.at(0);
+		allLongest.push_back(longest);
+		sort(allLongest.begin(), allLongest.end(), compareLengths);
+		while (allLongest.size() > 10) {
+			allLongest.pop_back();
+		}
+
+		printf("\rSearched through %d of %d starting points", pointCounter, startPoints.size());
+
 		cout << flush;
 	}
 
+	int routeCounter = 0;
+	for (Route route : allLongest) {
+		routeCounter++;
+		double x, y;
+		x = route.startingPoint->x;
+		y = route.startingPoint->y;
+
+		transform->Transform(1,&x,&y);
+
+		printf("\nLINESTRING( %.6f %.6f", y, x);
+		for (Connection *connection : route.connections) {
+			x = connection->connectedPoint->x;
+			y = connection->connectedPoint->y;
+			transform->Transform(1,&x,&y);
+			printf(", %.6f %.6f", y, x);
+		}
+		printf(")\n");
+
+		if (routeCounter >= 10) {
+			break;
+		}
+	}
 }

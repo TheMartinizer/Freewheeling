@@ -3,6 +3,8 @@
 
 #include <vector>
 
+#include "Constants.h"
+
 
 struct Connection;
 
@@ -23,12 +25,24 @@ struct Connection {
 	double horizontalDistance;
 	double heightDifference;
 	double sinSlope;
+	double cosSlope;
+
+	double speeds[MAXIMUM_SPEED_KMH - MINIMUM_SPEED_KMH + 1];
 };
 
 struct Route {
 	RoadPoint* startingPoint;
 	std::vector<Connection*> connections;
 	double distance;
+};
+
+struct SearchPoint {
+	RoadPoint* startingPoint;
+	RoadPoint* currentPoint;
+	std::vector<Connection*> connections;
+	double distance;
+	double speed;
+	double energy;
 };
 
 #endif // DATASTRUCTURES_H
