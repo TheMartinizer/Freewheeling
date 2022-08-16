@@ -2,6 +2,7 @@
 #define DATASTRUCTURES_H
 
 #include <vector>
+#include <memory>
 
 #include "Constants.h"
 
@@ -11,35 +12,31 @@ struct Connection;
 struct RoadPoint
 {
 	double x, y, z;
-	std::vector<Connection*> connections;
-
-	~RoadPoint() {
-		for (Connection* connection : connections) {
-			delete connection;
-		}
-	}
+	std::vector<std::shared_ptr<Connection>> connections;
 };
 
 struct Connection {
-	RoadPoint* connectedPoint;
+	std::shared_ptr<RoadPoint> connectedPoint;
 	double horizontalDistance;
 	double heightDifference;
 	double sinSlope;
 	double cosSlope;
 
+	bool hasBikeLane;
+
 	double speeds[MAXIMUM_SPEED_KMH - MINIMUM_SPEED_KMH + 1];
 };
 
 struct Route {
-	RoadPoint* startingPoint;
-	std::vector<Connection*> connections;
+	std::shared_ptr<RoadPoint> startingPoint;
+	std::vector<std::shared_ptr<Connection>> connections;
 	double distance;
 };
 
 struct SearchPoint {
-	RoadPoint* startingPoint;
-	RoadPoint* currentPoint;
-	std::vector<Connection*> connections;
+	std::shared_ptr<RoadPoint> startingPoint;
+	std::shared_ptr<RoadPoint> currentPoint;
+	std::vector<std::shared_ptr<Connection>> connections;
 	double distance;
 	double speed;
 	double energy;
