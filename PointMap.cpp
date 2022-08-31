@@ -5,6 +5,7 @@
 #include <iostream>
 #include <limits>
 #include <chrono>
+#include <cfloat>
 
 void simulateSlope(std::shared_ptr<Connection> connection) {
 	for (int initialSpeed = MINIMUM_SPEED_KMH; initialSpeed <= MAXIMUM_SPEED_KMH; initialSpeed++) {
@@ -28,18 +29,32 @@ void simulateSlope(std::shared_ptr<Connection> connection) {
 	}
 }
 
-PointMap::PointMap(GDALDataset *dataset) : PointMap(dataset, true) {};
+PointMap::PointMap() : srcEpsg(0), transformation(nullptr) {
+	minimumX = DBL_MAX;
+	maximumX = -DBL_MAX;
+	minimumY = DBL_MAX;
+	maximumY = -DBL_MAX;
+	minimumZ = DBL_MAX;
+	maximumZ = -DBL_MAX;
+}
 
+void PointMap::loadDataset(GDALDataset *dataset) {
+	loadDataset(dataset, [](Progress progress){printf("\r%s: %d%%", progress.message.c_str(), progress.percent); std::cout << std::flush;});
+}
 
-PointMap::PointMap(GDALDataset* dataset, bool printProgress) {
+void PointMap::loadDataset(GDALDataset* dataset, std::function<void(Progress progress)> progressCallback) {
 	// First, find the speed limits
 	OGRLayer *speedLimits;
 	speedLimits = dataset->GetLayerByName("Fartsgrense");
 
 	std::unordered_map<int, int> linkIdToSpeedLimitMap;
 
-	if (printProgress) {
-		printf("Finding speed limits\n");
+	if (progressCallback) {
+		Progress currentProgress;
+		currentProgress.message = "Finding speed limits";
+		currentProgress.percent = 0;
+		
+		progressCallback(currentProgress);
 	}
 	for (auto& feature : speedLimits) {
 		int idField = feature->GetFieldIndex("lineærposisjon|LineærPosisjonStrekning|lenkesekvens|Identifikasjon|lokalId");
@@ -57,8 +72,11 @@ PointMap::PointMap(GDALDataset* dataset, bool printProgress) {
 	// Veglenke means "road chain" in Norwegian
 	roads = dataset->GetLayerByName("Veglenke");
 
-	if (printProgress) {
-		printf("Finding extents of road network\n");
+	if (progressCallback) {
+		Progress currentProgress;
+		currentProgress.message = "Finding extents of road network";
+		currentProgress.percent = 0;
+		progressCallback(currentProgress);
 	}
 
 	// Find the extents that the PointMap needs to extend to
@@ -79,19 +97,25 @@ PointMap::PointMap(GDALDataset* dataset, bool printProgress) {
 	}
 
 	// Next, create the point map with its connections
-	if (printProgress) {
-		printf("Creating graph of road network\n");
+	if (progressCallback) {
+		Progress currentProgress;
+		currentProgress.message = "Creating graph of road network";
+		currentProgress.percent = 0;
+		progressCallback(currentProgress);
 	}
-	auto lastPrintTime = std::chrono::system_clock::now();
+	auto lastUpdateTime = std::chrono::system_clock::now();
 	int counter = 0;
 	for (auto& road : roads) {
-		if (printProgress) {
+		if (progressCallback) {
 			counter++;
 			auto now = std::chrono::system_clock::now();
-			if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastPrintTime).count() > 200) {
-				printf("\rCurrently on road %d of %d", counter, numberOfRoads);
-				std::cout << std::flush;
-				lastPrintTime = now;
+			if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastUpdateTime).count() > 200) {
+				Progress currentProgress;
+				currentProgress.message = "Creating graph of road network";
+				currentProgress.percent = (int) (counter * 100.0 / numberOfRoads);
+				currentProgress.loadedRoads = loadedRoads;
+				progressCallback(currentProgress);
+				lastUpdateTime = now;
 			}
 		}
 
@@ -162,6 +186,7 @@ PointMap::PointMap(GDALDataset* dataset, bool printProgress) {
 
 		// Go through all the points and create road points and connections
 		OGRLineString *lineString = road->GetGeometryRef()->toLineString();
+		std::vector<std::shared_ptr<RoadPoint>> loadedRoad;
 		for (int i = 0; i < lineString->getNumPoints() - 1; i++) {
 			OGRPoint thisOgrPoint;
 			lineString->getPoint(i, &thisOgrPoint);
@@ -169,8 +194,13 @@ PointMap::PointMap(GDALDataset* dataset, bool printProgress) {
 			OGRPoint nextOgrPoint;
 			lineString->getPoint(i+1, &nextOgrPoint);
 
-			std::shared_ptr<RoadPoint> thisPoint = getPoint(thisOgrPoint.getX(), thisOgrPoint.getY(), thisOgrPoint.getZ());
-			std::shared_ptr<RoadPoint> nextPoint = getPoint(nextOgrPoint.getX(), nextOgrPoint.getY(), nextOgrPoint.getZ());
+			std::shared_ptr<RoadPoint> thisPoint = getPoint(thisOgrPoint.getX(), thisOgrPoint.getY(), thisOgrPoint.getZ(), road->GetGeometryRef()->getSpatialReference());
+			std::shared_ptr<RoadPoint> nextPoint = getPoint(nextOgrPoint.getX(), nextOgrPoint.getY(), nextOgrPoint.getZ(), road->GetGeometryRef()->getSpatialReference());
+			
+			loadedRoad.push_back(thisPoint);
+			if (i == lineString->getNumPoints() - 2) {
+				loadedRoad.push_back(nextPoint);
+			}
 
 			double distance = sqrt(pow(nextPoint->x - thisPoint->x, 2) + pow(nextPoint->y - thisPoint->y, 2));
 			double heightDifference = nextPoint->z - thisPoint->z;
@@ -208,10 +238,12 @@ PointMap::PointMap(GDALDataset* dataset, bool printProgress) {
 				nextPoint->connections.push_back(connection);
 			}
 		}
+		
+		loadedRoads.push_back(loadedRoad);
 	}
 }
 
-std::shared_ptr<RoadPoint> PointMap::getPoint(double x, double y, double z) {
+std::shared_ptr<RoadPoint> PointMap::getPoint(double x, double y, double z, OGRSpatialReference *ref) {
 	double xValue = ((x - minimumX) * numberOfBins / (maximumX - minimumX));
 	double yValue = ((y - minimumY) * numberOfBins / (maximumY - minimumY));
 	double zValue = ((z - minimumZ) * numberOfBins / (maximumZ - minimumZ));
@@ -278,6 +310,25 @@ std::shared_ptr<RoadPoint> PointMap::getPoint(double x, double y, double z) {
 	newPoint->x = x;
 	newPoint->y = y;
 	newPoint->z = z;
+	
+	// Calculate lat, lon and alt
+	double newX = x;
+	double newY = y;
+	double newZ = z;
+	
+	if (ref->GetEPSGGeogCS() != srcEpsg) {
+		OGRSpatialReference targetReference;
+		targetReference.importFromEPSG(4326);
+		transformation = OGRCreateCoordinateTransformation(ref, &targetReference);
+		
+		srcEpsg = ref->GetEPSGGeogCS();
+	}
+	
+	transformation->Transform(1, &newX, &newY, &newZ);
+	
+	newPoint->lat = newX;
+	newPoint->lon = newY;
+	newPoint->alt = newZ;
 
 	int bin = ((int) xValue * numberOfBins + (int) yValue) * numberOfBins + (int) zValue;
 	pointMap[bin]->push_back(newPoint);
@@ -288,4 +339,8 @@ std::shared_ptr<RoadPoint> PointMap::getPoint(double x, double y, double z) {
 
 std::vector<std::shared_ptr<RoadPoint>> PointMap::getAllPoints() {
 	return roadPoints;
+}
+
+std::vector<std::vector<std::shared_ptr<RoadPoint>>> PointMap::getLoadedRoads() {
+	return loadedRoads;
 }

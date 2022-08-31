@@ -12,6 +12,7 @@ struct Connection;
 struct RoadPoint
 {
 	double x, y, z;
+	double lat, lon, alt;
 	std::vector<std::shared_ptr<Connection>> connections;
 };
 
@@ -25,21 +26,15 @@ struct Connection {
 	bool hasBikeLane;
 
 	double speeds[MAXIMUM_SPEED_KMH - MINIMUM_SPEED_KMH + 1];
-};
-
-struct Route {
-	std::shared_ptr<RoadPoint> startingPoint;
-	std::vector<std::shared_ptr<Connection>> connections;
-	double distance;
-};
-
-struct SearchPoint {
-	std::shared_ptr<RoadPoint> startingPoint;
-	std::shared_ptr<RoadPoint> currentPoint;
-	std::vector<std::shared_ptr<Connection>> connections;
-	double distance;
-	double speed;
-	double energy;
+	
+	double getOutputSpeed(double inputSpeed) {
+		int bin = (int) (inputSpeed * 3.6) - MINIMUM_SPEED_KMH;
+		if (bin < 0 || bin >= MAXIMUM_SPEED_KMH - MINIMUM_SPEED_KMH + 1) {
+			return -1;
+		}
+		
+		return speeds[bin];
+	}
 };
 
 #endif // DATASTRUCTURES_H
