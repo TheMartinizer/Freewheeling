@@ -15,9 +15,10 @@
 
 using namespace Marble;
 
-MapWindow::MapWindow(QWidget *parent) : QWidget(parent), mapWidget(new Marble::MarbleWidget()), pointMap(nullptr), worker(MarbleWorker(this)), progressBar(QProgressBar(this)) {
+MapWindow::MapWindow(QWidget *parent) : QWidget(parent), mapWidget(new Marble::MarbleWidget()), pointMap(nullptr), worker(MarbleWorker(this)), progressBar(QProgressBar(this)), amountOfPointsSlider(QSlider(Qt::Horizontal, this)), amountOfPointsLabel(QString("Showing 10 starting points"), this) {
 	
 	this->connect(&worker, &MarbleWorker::mapUpdated, this, &MapWindow::receiveMapUpdated);
+	this->connect(mapWidget, &MarbleWidget::zoomChanged, this, &MapWindow::handleZoomChanged);
 	
 	mapWidget->setProjection(Mercator);
 	mapWidget->setMapThemeId("earth/openstreetmap/openstreetmap.dgml");
@@ -26,10 +27,11 @@ MapWindow::MapWindow(QWidget *parent) : QWidget(parent), mapWidget(new Marble::M
 	mapWidget->setShowCompass(false);
 	mapWidget->setShowOverviewMap(false);
 	mapWidget->inputHandler()->setMouseButtonPopupEnabled(Qt::LeftButton, false);
+	//mapWidget->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Maximum);
 	
 	// Get menu bar going
 	QVBoxLayout *layout = new QVBoxLayout(this);
-	this->layout()->addWidget(mapWidget);
+	layout->addWidget(mapWidget);
 	
 	QMenuBar *menuBar = new QMenuBar();
 	QMenu *fileMenu = new QMenu("File");
@@ -39,16 +41,27 @@ MapWindow::MapWindow(QWidget *parent) : QWidget(parent), mapWidget(new Marble::M
 	fileMenu->addAction("Quit");
 	
 	this->connect(mapWidget, &MarbleWidget::mouseClickGeoPosition, this, &MapWindow::receiveMouseClicked);
+	this->connect(&amountOfPointsSlider, &QSlider::valueChanged, this, &MapWindow::receiveSliderMoved);
+	this->connect(&amountOfPointsSlider, &QSlider::sliderReleased, this, &MapWindow::receiveSliderReleased);
 	
 	menuBar->addMenu(fileMenu);
-	this->layout()->setMenuBar(menuBar);
+	layout->setMenuBar(menuBar);
 	
-	this->layout()->addWidget(&progressBar);
+	amountOfPointsLabel.setAlignment(Qt::AlignCenter);
+	layout->addWidget(&amountOfPointsLabel);
+	amountOfPointsSlider.setTickInterval(1);
+	amountOfPointsSlider.setRange(1, 100);
+	amountOfPointsSlider.setValue(amountOfPoints);
+	layout->addWidget(&amountOfPointsSlider);
+	layout->addWidget(&progressBar);
+	
+	layout->setStretchFactor(mapWidget, 1);
+	layout->setStretchFactor(&amountOfPointsLabel, 0);
 }
 
 void MapWindow::loadGml() {
-	QString fileName = QFileDialog::getOpenFileName(this, tr("Load GML file"), "", tr("GML Files (*.gml);;All Files (*)"));
-	worker.loadData(fileName);
+	QStringList fileNames = QFileDialog::getOpenFileNames(this, tr("Load GML file"), "", tr("GML Files (*.gml);;All Files (*)"));
+	worker.loadData(fileNames);
 }
 
 void MapWindow::findStartingPoints() {
@@ -87,4 +100,28 @@ void MapWindow::receiveMapUpdated(GeoDataDocument *document, bool appendDocument
 	progressBar.setMaximum(100);
 	progressBar.setValue(percent);
 	progressBar.setFormat(message);
+}
+
+void MapWindow::receiveSliderMoved(int newValue) {
+	QString amountOfPointsString("Showing %1 starting points");
+	if (newValue == 100) {
+		amountOfPointsString = amountOfPointsString.arg("all");
+	} else {
+		amountOfPointsString = amountOfPointsString.arg(newValue);
+	}
+	
+	amountOfPointsLabel.setText(amountOfPointsString);
+	amountOfPoints = newValue;
+	
+	if (!amountOfPointsSlider.isSliderDown()) {
+		receiveSliderReleased();
+	}
+}
+
+void MapWindow::receiveSliderReleased() {
+	worker.receiveRedrawStartingPoints(amountOfPoints);
+}
+
+void MapWindow::handleZoomChanged(int zoomLevel) {
+	
 }

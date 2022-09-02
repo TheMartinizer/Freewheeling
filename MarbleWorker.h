@@ -16,9 +16,10 @@ public:
 	MarbleWorker(QObject *parent);
 	~MarbleWorker();
 	
-	void loadData(QString filename);
+	void loadData(QStringList filename);
 	void findStartingPoints();
 	void receiveClick(float lat, float lon);
+	void receiveRedrawStartingPoints(int numberOfStartingPoints);
 	
 signals:
 	void mapUpdated(Marble::GeoDataDocument *document, bool appendDocument, QString progressMessage, int progressPercent);
@@ -35,14 +36,19 @@ private:
 	PointMap *pointMap = nullptr;
 	std::vector<std::shared_ptr<RouteGraph>> routeGraphs;
 	
+	std::shared_ptr<RouteGraph> selectedRouteGraph = nullptr;
+	
 	bool shouldLoadFile = false;
-	QString filename = "";
+	QStringList filenames;
 	
 	bool shouldFindStartingPoints = false;
 	
 	bool receivedClick = false;
 	float clickedLat = 0;
 	float clickedLon = 0;
+	
+	bool redrawStartingPoints = false;
+	int amountOfPointsToShow = 10;
 	
 	static Marble::GeoDataDocument *createDocument(Progress progress, int roads);
 	static void addRouteGraphsToDocument(std::vector<std::shared_ptr<RouteGraph>> routeGraphs, Marble::GeoDataDocument *document, int number = -1);

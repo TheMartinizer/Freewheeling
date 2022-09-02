@@ -27,6 +27,11 @@ private:
 	double pointThreshold = POINT_THRESHOLD;
 	std::map<int, std::shared_ptr<std::vector<std::shared_ptr<RoadPoint>>>> pointMap;
 	std::vector<std::shared_ptr<RoadPoint>> roadPoints;
+	int srcEpsg;
+	OGRCoordinateTransformation *transformation;
+	std::vector<std::vector<std::shared_ptr<RoadPoint>>> loadedRoads;
+	
+	void rebuildPointMap();
 
 public:
 	PointMap();
@@ -36,11 +41,6 @@ public:
 	std::shared_ptr<RoadPoint> getPoint(double x, double y, double z, OGRSpatialReference *ref);
 	std::vector<std::shared_ptr<RoadPoint>> getAllPoints();
 	std::vector<std::vector<std::shared_ptr<RoadPoint>>> getLoadedRoads();
-	
-private:
-	int srcEpsg;
-	OGRCoordinateTransformation *transformation;
-	std::vector<std::vector<std::shared_ptr<RoadPoint>>> loadedRoads;
 };
 
 #endif // POINTMAP_H

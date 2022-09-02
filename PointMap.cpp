@@ -78,6 +78,13 @@ void PointMap::loadDataset(GDALDataset* dataset, std::function<void(Progress pro
 		currentProgress.percent = 0;
 		progressCallback(currentProgress);
 	}
+	
+	minimumX = DBL_MAX;
+	minimumY = DBL_MAX;
+	minimumZ = DBL_MAX;
+	maximumX = -DBL_MAX;
+	maximumY = -DBL_MAX;
+	maximumZ = -DBL_MAX;
 
 	// Find the extents that the PointMap needs to extend to
 	int numberOfRoads = 0;
@@ -95,6 +102,15 @@ void PointMap::loadDataset(GDALDataset* dataset, std::function<void(Progress pro
 		}
 		numberOfRoads++;
 	}
+	
+	minimumX -= 1;
+	minimumY -= 1;
+	minimumZ -= 1;
+	maximumX += 1;
+	maximumY += 1;
+	maximumZ += 1;
+	
+	rebuildPointMap();
 
 	// Next, create the point map with its connections
 	if (progressCallback) {
@@ -141,7 +157,13 @@ void PointMap::loadDataset(GDALDataset* dataset, std::function<void(Progress pro
 		const char* roadType = road->GetFieldAsString(typeIndex);
 
 		// If this road is a staircase (which it might apparently be), we don't want to bike it
-		if (strcmp(roadType, "trapp") == 0) {
+		if (
+				strcmp(roadType, "trapp") == 0 
+				|| strcmp(roadType, "motorveg") == 0
+				|| strcmp(roadType, "motortrafikkveg") == 0
+				|| strcmp(roadType, "bilferje") == 0
+				|| strcmp(roadType, "passasjerferje") == 0
+		) {
 			continue;
 		}
 
@@ -240,6 +262,28 @@ void PointMap::loadDataset(GDALDataset* dataset, std::function<void(Progress pro
 		}
 		
 		loadedRoads.push_back(loadedRoad);
+	}
+}
+
+void PointMap::rebuildPointMap() {
+	pointMap.clear();
+	loadedRoads.clear();
+	
+	for (std::shared_ptr<RoadPoint> roadPoint : roadPoints) {
+		int xBin = (int) ((roadPoint->x - minimumX) * numberOfBins / (maximumX - minimumX));
+		int yBin = (int) ((roadPoint->y - minimumY) * numberOfBins / (maximumY - minimumY));
+		int zBin = (int) ((roadPoint->z - minimumZ) * numberOfBins / (maximumZ - minimumZ));
+		
+		if (xBin < 0 || xBin >= NUMBER_OF_BINS || yBin < 0 || yBin >= NUMBER_OF_BINS || zBin < 0 || zBin >= NUMBER_OF_BINS) {
+			continue;
+		}
+		
+		int bin = (xBin * numberOfBins + yBin) * numberOfBins + zBin;
+		if (pointMap.find(bin) == pointMap.end()) {
+			pointMap[bin] = std::shared_ptr<std::vector<std::shared_ptr<RoadPoint>>>(new std::vector<std::shared_ptr<RoadPoint>>);
+		}
+		
+		pointMap[bin]->push_back(roadPoint);
 	}
 }
 
